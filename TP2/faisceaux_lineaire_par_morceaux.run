@@ -1,0 +1,102 @@
+reset;
+include common.run;
+
+option solver_msg 0;
+
+option xpress_options 'outlev=0';
+option solver cplexamp;
+
+set ITERATIONS default {};
+
+param CUT_RHS{ITERATIONS} default 0;
+param CUT_COEFF{ITERATIONS, 1..nVariables} default 0;
+param CUT_POINT{ITERATIONS, 1..nVariables} default 0;
+param X_h_etoile{i in 1..nVariables} default 0;
+param prediction ;
+param ARRET symbolic default 'NON';
+param LB default -1e20;
+param UB default +1e20;
+param eta default 0.5;
+param ITERATION;
+
+param n :=4; 
+
+
+param t_bonus{i in 1..n} default 0;
+
+param t_bonus_next{i in 1..n};
+let t_bonus_next[n/2]:=0.1;
+let t_bonus_next[n/2+1]:=0.1;
+let{i in 1..(n/2-1)} t_bonus_next[i] := 1*(n/2-i);
+let{i in (n/2+2)..(n)} t_bonus_next[i] := 1*(i-n/2-1);
+
+param cassure_bonus{1..nVariables, 1..n};
+let{i in 1..nVariables, j in 1..n} cassure_bonus[i,j] := xMin[i]+j/n*(xMax[i]-xMin[i]);
+
+
+param t default 0;
+param t_next default 10;
+param BEST_UB default +1e20;
+
+
+var alpha;
+
+subject to cut{ ite in ITERATIONS}:
+	alpha 
+	>=
+	+CUT_RHS[ite]
+	+sum{i in 1..nVariables}CUT_COEFF[ite, i]*(x[i]-CUT_POINT[ite, i])
+	;
+
+
+
+var diff_prev_opt{i in 1..nVariables}=x[i]-X_h_etoile[i];
+
+minimize OBJ:+alpha + 1/nVariables*sum{i in 1..nVariables}<<{k in 1..(n-1)}cassure_bonus[i,k];{k in 1..(n)}t_bonus[k]>>(diff_prev_opt[i]) ;
+
+let ITERATION := 1;
+printf "%6s%20s%20s%20s\n", 'ITE', 'LB', 'UB', 'BEST_UB';
+
+repeat {
+	# nouvelle iteration
+	let ITERATIONS := ITERATIONS union {ITERATION};
+	# calcul du sous estimateur
+	solve > trash.log;
+	if t==0 then{
+		let t := t_next;
+		let{i in 1..n} t_bonus[i]:= t_bonus_next[i];
+	}
+	let LB := alpha;
+
+	let{i in 1..nVariables}CUT_COEFF[ITERATION, i] := sub_gradient[i];
+	let{i in 1..nVariables}CUT_POINT[ITERATION, i] := x[i];
+	
+
+
+	let CUT_RHS[ITERATION] := nlp_obj;
+	
+	let UB := nlp_obj;
+	let prediction := LB -BEST_UB ;
+	
+	if (UB-BEST_UB)<eta*prediction then {
+		# Serious Step
+		let BEST_UB := UB; 
+		let{i in 1..nVariables} X_h_etoile[i] := x[i];
+		#let{i in 1..n} t_bonus[i]:= 0.5*t_bonus[i];
+
+	}else
+	{
+		#let{i in 1..n} t_bonus[i]:= 2*t_bonus[i];
+	}
+	#display x;		
+	printf "%6d%20.6f%20.6f%20.6f\n", ITERATION, LB, UB, BEST_UB;
+	#expand;
+	if -prediction <= 1e-3 then {
+		let ARRET := 'OUI'
+	}else{
+		let ITERATION := ITERATION+1;
+	};
+	
+} while ARRET != 'OUI'; 
+
+display x;
